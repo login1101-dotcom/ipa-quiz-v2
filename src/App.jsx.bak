@@ -1,0 +1,248 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import "./App.css";
+
+/* ============================
+   IPA Vowel Quiz – v3
+   * A: 音(母音のみ) → 名称  ← MP3再生（端末差なし・自然）
+   * B: IPA → 名称
+   * C: 名称 → IPA
+   * 例単語は現在の問題のみ表示、各単語に再生ボタン（Web Speech）
+============================ */
+
+/** 音源ファイルは public/vowels 配下に下記ファイル名で置く想定 */
+const VOWELS = [
+  { name: "short a",  ipa: "/æ/",   examples: ["cat","camp","bath","fan"],         highlight: ["a"],          file: "short_a.mp3" },
+  { name: "long a",   ipa: "/eɪ/",  examples: ["fate","they","great"],             highlight: ["a","ey","ea"], file: "long_a.mp3" },
+  { name: "ar sound", ipa: "/ɑːr/", examples: ["car","art","mark"],                highlight: ["ar"],         file: "ar_sound.mp3" },
+  { name: "Schwa",    ipa: "/ə/",   examples: ["about","support","pencil"],        highlight: ["a","u","i"],  file: "schwa.mp3" },
+  { name: "short e",  ipa: "/e/",   examples: ["let","get","egg"],                 highlight: ["e"],          file: "short_e.mp3" },
+  { name: "long e",   ipa: "/iː/",  examples: ["fee","she","believe"],             highlight: ["ee","e","ie"],file: "long_e.mp3" },
+  { name: "er sound", ipa: "/ɜːr/", examples: ["bird","term","hurt"],              highlight: ["ir","er","ur"],file: "er_sound.mp3" },
+  { name: "short i",  ipa: "/ɪ/",   examples: ["fit","income","it"],               highlight: ["i"],          file: "short_i.mp3" },
+  { name: "long i",   ipa: "/aɪ/",  examples: ["eye","iron","idea"],               highlight: ["eye","i","i"],file: "long_i.mp3" },
+  { name: "short o",  ipa: "/ɒ/",   examples: ["dog","hot","not","lock"],          highlight: ["o"],          file: "short_o.mp3" },
+  { name: "short oo", ipa: "/ʊ/",   examples: ["book","should","put"],             highlight: ["oo","ou","u"],file: "short_oo.mp3" },
+  { name: "long oo",  ipa: "/uː/",  examples: ["too","loose","through"],           highlight: ["oo","oo","ou"],file: "long_oo.mp3" },
+  { name: "long o",   ipa: "/oʊ/",  examples: ["note","no","slow"],                highlight: ["o","o","ow"], file: "long_o.mp3" },
+  { name: "ow sound", ipa: "/aʊ/",  examples: ["house","out","count"],             highlight: ["ou"],         file: "ow_sound.mp3" },
+  { name: "oi sound", ipa: "/ɔɪ/",  examples: ["boy","joy","join"],                highlight: ["oy","oy","oi"],file: "oi_sound.mp3" },
+  { name: "or sound", ipa: "/ɔːr/", examples: ["for","sort","storm"],              highlight: ["or"],         file: "or_sound.mp3" },
+  { name: "short u",  ipa: "/ʌ/",   examples: ["but","fun","cup"],                 highlight: ["u"],          file: "short_u.mp3" },
+];
+
+// Schwaの複数強調
+const SCHWA_MULTI_HILITE = { about: ["a"], support: ["u"], pencil: ["i"] };
+
+/** 例単語用：Web Speech（単語読み上げだけに使う） */
+function useSpeech() {
+  const synthRef = useRef(typeof window !== "undefined" ? window.speechSynthesis : null);
+  const speak = (text) => {
+    const synth = synthRef.current;
+    if (!synth) return;
+    synth.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang = "en-US";
+    utt.rate = 0.95;
+    synth.speak(utt);
+  };
+  return { speak };
+}
+
+/** 母音MP3再生用（/public/vowels/*.mp3） */
+function useVowelAudio() {
+  const cacheRef = useRef(new Map());
+  const currentRef = useRef(null);
+
+  const play = (file) => {
+    if (!file) return;
+    const url = `/vowels/${file}`;
+    let audio = cacheRef.current.get(url);
+    if (!audio) {
+      audio = new Audio(url);
+      cacheRef.current.set(url, audio);
+    }
+    // 直前の音を止める
+    if (currentRef.current && !currentRef.current.paused) {
+      try { currentRef.current.pause(); } catch {}
+      currentRef.current.currentTime = 0;
+    }
+    currentRef.current = audio;
+    audio.currentTime = 0;
+    // ユーザー操作のボタンから呼ばれるので自動再生ブロックにかかりにくい
+    audio.play().catch(() => {});
+  };
+
+  return { play };
+}
+
+function randInt(n) { return Math.floor(Math.random() * n); }
+function pick(arr, n, reject) {
+  const pool = reject ? arr.filter(x => reject(x)) : [...arr];
+  const out = [];
+  while (out.length < n && pool.length) {
+    const i = randInt(pool.length);
+    out.push(pool.splice(i, 1)[0]);
+  }
+  return out;
+}
+
+function highlightWord(word, patterns) {
+  if (SCHWA_MULTI_HILITE[word]) {
+    let result = word;
+    SCHWA_MULTI_HILITE[word].forEach((t) => {
+      const re = new RegExp(t, "gi");
+      result = result.replace(re, (m) => `<mark>${m}</mark>`);
+    });
+    return result;
+  }
+  if (!patterns || patterns.length === 0) return word;
+  for (const p of patterns) {
+    const idx = word.toLowerCase().indexOf(p.toLowerCase());
+    if (idx !== -1) {
+      return `${word.slice(0, idx)}<mark>${word.slice(idx, idx + p.length)}</mark>${word.slice(idx + p.length)}`;
+    }
+  }
+  return word;
+}
+
+function buildQuestion(mode) {
+  const v = VOWELS[randInt(VOWELS.length)];
+  const ex = v.examples[randInt(v.examples.length)];
+  let prompt = "";
+  let choices = [];
+  let answer = "";
+  let playFile = v.file; // ← これを再生
+
+  if (mode === "A") {
+    prompt = "音を聞いて名称を選んでください";
+    answer = v.name;
+    const others = pick(VOWELS, 3, (x) => x.name !== v.name).map((x) => x.name);
+    choices = shuffle([v.name, ...others]);
+  } else if (mode === "B") {
+    prompt = `IPA: ${v.ipa} に対応する名称は？`;
+    answer = v.name;
+    const others = pick(VOWELS, 3, (x) => x.name !== v.name).map((x) => x.name);
+    choices = shuffle([v.name, ...others]);
+  } else {
+    prompt = `名称: ${v.name} に対応する IPA は？`;
+    answer = v.ipa;
+    const others = pick(VOWELS, 3, (x) => x.ipa !== v.ipa).map((x) => x.ipa);
+    choices = shuffle([v.ipa, ...others]);
+  }
+  return { v, ex, prompt, choices, answer, playFile };
+}
+
+function shuffle(arr) { return [...arr].sort(() => Math.random() - 0.5); }
+
+export default function App() {
+  const { speak } = useSpeech();
+  const vowelAudio = useVowelAudio();
+
+  const [mode, setMode] = useState("A");
+  const [q, setQ] = useState(() => buildQuestion("A"));
+  const [score, setScore] = useState(0);
+  const [count, setCount] = useState(0);
+  const [lastResult, setLastResult] = useState(null); // 'ok' | 'ng' | null
+  const [incorrect, setIncorrect] = useState(new Set()); // 不正解保持
+
+  // モード変更時は問題リセット
+  useEffect(() => {
+    setQ(buildQuestion(mode));
+    setLastResult(null);
+    setIncorrect(new Set());
+  }, [mode]);
+
+  // 問題の音声＝母音MP3を再生
+  const onPlay = () => vowelAudio.play(q.playFile);
+
+  const onAnswer = (choice) => {
+    if (lastResult === "ok") return; // すでに正解表示中は無視
+
+    const isCorrect = choice === q.answer;
+    if (isCorrect) {
+      setLastResult("ok");
+      setScore((s) => s + 1);
+      setCount((c) => c + 1);
+      setTimeout(() => {
+        setQ(buildQuestion(mode));
+        setLastResult(null);
+        setIncorrect(new Set());
+      }, 650);
+    } else {
+      setLastResult("ng");
+      setIncorrect((prev) => new Set(prev).add(choice));
+      setCount((c) => c + 1);
+    }
+  };
+
+  // 例単語（現在の問題だけ）— 単語読み上げは Web Speech
+  const exampleCards = useMemo(() => {
+    const v = q.v;
+    return v.examples.slice(0, 4).map((w, i) => (
+      <div className="ex-card" key={i}>
+        <div
+          className="ex-word"
+          dangerouslySetInnerHTML={{ __html: highlightWord(w, v.highlight) }}
+        />
+        <button className="btn play small" onClick={() => speak(w)}>▶ 再生</button>
+      </div>
+    ));
+  }, [q, speak]);
+
+  return (
+    <div className="app">
+      <h1>IPA Vowel Quiz – v3</h1>
+
+      <div className="topbar">
+        <div className="mode">
+          <label>Mode:</label>
+          <select value={mode} onChange={(e) => setMode(e.target.value)}>
+            <option value="A">A: 音(母音のみ) → 名称</option>
+            <option value="B">B: IPA → 名称</option>
+            <option value="C">C: 名称 → IPA</option>
+          </select>
+        </div>
+        <div className="score">Score: {score} / {count}</div>
+      </div>
+
+      <section className="question-card">
+        <div className="prompt">
+          <div className="prompt-text">{q.prompt}</div>
+          <button className="btn play big" onClick={onPlay}>▶ 再生</button>
+        </div>
+
+        <div className="feedback" aria-live="polite">
+          {lastResult === "ok" && <span className="ok">正解！</span>}
+          {lastResult === "ng" && <span className="ng">不正解… もう一度選んでください</span>}
+        </div>
+
+        <div className="choices">
+          {q.choices.map((c, i) => {
+            const isCorrect = lastResult === "ok" && c === q.answer;
+            const isIncorrect = incorrect.has(c);
+            const disabled = isCorrect;
+            return (
+              <button
+                key={i}
+                className={
+                  "choice" +
+                  (isCorrect ? " correct" : "") +
+                  (isIncorrect ? " wrong" : "")
+                }
+                onClick={() => onAnswer(c)}
+                disabled={disabled}
+              >
+                {c}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="examples">
+        <h2>例単語</h2>
+        <div className="ex-grid">{exampleCards}</div>
+      </section>
+    </div>
+  );
+}
