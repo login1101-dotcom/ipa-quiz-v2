@@ -1,0 +1,95 @@
+    setCurrentVowel(v);
+    setAnswer(v.name);
+    const wrong = shuffle(VOWELS.filter((x) => x.name !== v.name)).slice(0, 3);
+    setChoices(shuffle([v.name, ...wrong.map((x) => x.name)]));
+    setExamples(v.examples.slice(0, 3));
+    setPicked({});
+    setSolved(false);
+    setIndex((i) => i + 1);
+  }
+
+  useEffect(() => {
+    prepareOrder();
+    newQuestion();
+  }, []);
+
+  function onPick(opt) {
+    if (solved) return;
+    const ok = opt === answer;
+    setPicked((prev) => ({ ...prev, [opt]: ok ? "correct" : "wrong" }));
+    if (ok) {
+      setSolved(true);
+      setTimeout(() => newQuestion(), 800);
+    }
+  }
+
+  return (
+    <div className="wrap">
+      <h1>IPA Vowel Quiz</h1>
+
+      <div className="q-row">
+        <div>この発音記号は？</div>
+        <div
+          style={{
+            fontWeight: 800,
+            fontSize: "28px",
+            padding: "6px 10px",
+            borderRadius: "10px",
+            border: "1px solid #333542",
+            background: "linear-gradient(180deg, #1f1f27, #14141b)",
+          }}
+        >
+          {currentVowel?.ipa || ""}
+        </div>
+        <button
+          type="button"
+          className="sound-btn"
+          onClick={() => currentVowel && playVowel(currentVowel.name, currentVowel.examples[0])}
+        >
+          ▶ 再生
+        </button>
+      </div>
+
+      <div className="choices">
+        {choices.map((opt) => {
+          const state = picked[opt];
+          const cls =
+            "choice" +
+            (state === "correct" ? " choice-correct" : "") +
+            (state === "wrong" ? " choice-wrong" : "");
+          return (
+            <button
+              key={opt}
+              type="button"
+              className={cls}
+              onClick={() => onPick(opt)}
+            >
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="sec-title"><strong>例単語:</strong></div>
+      <div className="examples">
+        {examples.map((w) => (
+          <div className="ex-card" key={w}>
+            <div
+              className="ex-word"
+              dangerouslySetInnerHTML={{
+                __html: currentVowel ? highlightWord(w, currentVowel.name) : w,
+              }}
+            />
+            <button
+              type="button"
+              className="play-btn"
+              onClick={() => playWord(w)}
+            >
+              ▶ 再生
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

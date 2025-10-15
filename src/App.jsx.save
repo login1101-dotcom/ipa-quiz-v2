@@ -1,0 +1,225 @@
+import "./App.css";
+
+/* =========================================
+   IPA Vowel Quiz – フォニックス母音表（PDF）に完全準拠
+   US IPA / ランダム4択 / クリック判定 / ローカル音声最優先
+   ========================================= */
+
+const VOWELS = [
+  { name: "short a", ipa: "/æ/",  examples: ["camp", "bath", "fan"] },
+  { name: "long a",  ipa: "/eɪ/", examples: ["fate", "they", "great"] },
+  { name: "ar sound", ipa: "/ɑːr/", examples: ["car", "art", "mark"] }, // ← ここを /ɑːr/ に修正
+  { name: "Schwa",   ipa: "/ə/",  examples: ["about", "support", "pencil"] },
+
+  { name: "short e", ipa: "/e/",   examples: ["let", "get", "egg"] },
+  { name: "long e",  ipa: "/iː/",  examples: ["fee", "she", "believe"] },
+  { name: "er sound", ipa: "/ɝː/", examples: ["bird", "term", "hurt"] },
+
+  { name: "short i", ipa: "/ɪ/",  examples: ["fit", "income", "it"] },
+  { name: "long i",  ipa: "/aɪ/", examples: ["eye", "iron", "idea"] },
+
+  { name: "short o", ipa: "/ɑ/",  examples: ["hot", "not", "lock"] },
+  { name: "short oo", ipa: "/ʊ/", examples: ["book", "should", "put"] },
+  { name: "long oo",  ipa: "/uː/", examples: ["too", "loose", "through"] },
+
+  { name: "long o",  ipa: "/oʊ/", examples: ["note", "no", "slow"] },
+  { name: "ow sound", ipa: "/aʊ/", examples: ["house", "out", "count"] },
+  { name: "oi sound", ipa: "/ɔɪ/", examples: ["boy", "joy", "join"] },
+  { name: "or sound", ipa: "/ɔr/", examples: ["for", "sort", "storm"] },
+
+  { name: "short u", ipa: "/ʌ/",  examples: ["but", "fun", "come"] },
+];
+
+/* ---------- utils ---------- */
+function shuffle(a0) {
+  const a = [...a0];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+const sanitize = (s) =>
+  String(s).trim().toLowerCase().replaceAll(" ", "_").replaceAll("/", "");
+
+/* === 例単語の赤字ハイライト（PDF準拠 修正版） === */
+const VOWEL_REGEX = {
+  "short a": /(a)/i,
+
+  // fate / they / great
+  "long a": /(ey|ea|ai|ay|a(?=.))/i,
+
+  "ar sound": /(ar)/i,
+  Schwa: /([aeiou])/i,
+
+  "short e": /(e)/i,
+
+  // fee / sh(e) / believe
+
+  "long e": /(ee|ea|ie|e$)/i,
+
+  "er sound": /(ir|er|ur|ear)/i,
+
+  "short i": /(i)/i,
+  "long i": /(ey|igh|i(?=.)|y)/i,   // eye / iron / idea
+
+  "short o": /(o)/i,
+
+  "short oo": /(oo|ou|u)/i,
+
+  // too / loose / thr(ou)gh
+  "long oo": /(oo|ew|ue|ou(?=gh))/i,
+
+  // note / no / slow
+  "long o": /(oa|ow|oe|o$|o(?=.))/i,
+
+  "ow sound": /(ow|ou)/i,
+  "oi sound": /(oi|oy)/i,
+  "or sound": /(ore|oar|or)/i,
+
+  "short u": /(u|o(?=[^aeiou]*e?$))/i,
+};
+
+function highlightWord(w, vowelName) {
+  const rx = VOWEL_REGEX[vowelName];
+  return rx ? w.replace(rx, (m) => `<span class="vowel-red">${m}</span>`) : w;
+}
+
+/* ---------- audio: ローカル(MP3/M4A/WAV)最優先 ---------- */
+async function tryPlay(url) {
+  return new Promise((resolve, reject) => {
+    const audio = new Audio(url);
+    audio.oncanplaythrough = () => audio.play().then(resolve).catch(reject);
+    audio.onerror = reject;
+    audio.load();
+  });
+}
+function urlCandidates(relNoExt) {
+  const exts = [".mp3", ".m4a", ".wav"];
+  const base = import.meta.env.BASE_URL || "/";
+  const baskets = [
+    `${base}assets/audio/`,
+    `${base}assets/`,
+    `${base}audio/`,
+    `${base}sounds/`,
+    "/",
+  ];
+  const urls = [];
+  for (const b of baskets) for (const e of exts) urls.push(`${b}${relNoExt}${e}`);
+  return urls;
+}
+async function playWord(word) {
+  const key = sanitize(word);
+  for (const u of urlCandidates(`words/${key}`)) {
+    try { await tryPlay(u); return; } catch {}
+  }
+}
+async function playVowel(vowelName, sampleWord) {
+  const key = sanitize(vowelName);
+  for (const u of urlCandidates(`ipa/${key}`)) {
+    try { await tryPlay(u); return; } catch {}
+  }
+  await playWord(sampleWord);
+}
+
+/* ---------- component ---------- */
+export default function App() {
+  const [currentVowel, setCurrentVowel] = useState(null);
+  const [choices, setChoices] = useState([]);   // 4択
+  const [examples, setExamples] = useState([]); // 3語
+  const [answer, setAnswer] = useState(null);
+  const [picked, setPicked] = useState({});
+  const [solved, setSolved] = useState(false);
+
+  function newQuestion() {
+    const v = VOWELS[Math.floor(Math.random() * VOWELS.length)];
+    setCurrentVowel(v);
+    setAnswer(v.name);
+    const wrong = shuffle(VOWELS.filter(x => x.name !== v.name)).slice(0, 3);
+    setChoices(shuffle([v.name, ...wrong.map(x => x.name)]));
+    setExamples(v.examples.slice(0, 3));
+    setPicked({});
+    setSolved(false);
+  }
+  useEffect(() => { newQuestion(); }, []);
+
+  function onPick(opt) {
+    if (solved) return;
+    const ok = opt === answer;
+    setPicked(prev => ({ ...prev, [opt]: ok ? "correct" : "wrong" }));
+    if (ok) {
+      setSolved(true);
+      setTimeout(() => newQuestion(), 800);
+    }
+  }
+
+  return (
+    <div className="wrap">
+      <h1>IPA Vowel Quiz</h1>
+
+      <div className="q-row">
+        <div>この発音記号は？</div>
+        <div
+          style={{
+            fontWeight: 800,
+            fontSize: "28px",
+            padding: "6px 10px",
+            borderRadius: "10px",
+            border: "1px solid #333542",
+            background: "linear-gradient(180deg, #1f1f27, #14141b)",
+          }}
+        >
+          {currentVowel?.ipa || ""}
+        </div>
+        <button
+          type="button"
+          className="sound-btn"
+          onClick={() => currentVowel && playVowel(currentVowel.name, currentVowel.examples[0])}
+        >
+          ▶ 再生
+        </button>
+      </div>
+
+      <div className="choices">
+        {choices.map((opt) => {
+          const state = picked[opt];
+          const cls =
+            "choice" +
+            (state === "correct" ? " choice-correct" : "") +
+            (state === "wrong" ? " choice-wrong" : "");
+          return (
+            <button
+              key={opt}
+              type="button"
+              className={cls}
+              onClick={() => onPick(opt)}
+            >
+              {opt}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="sec-title"><strong>例単語:</strong></div>
+      <div className="examples">
+        {examples.map((w) => (
+          <div className="ex-card" key={w}>
+            <div
+              className="ex-word"
+              dangerouslySetInnerHTML={{
+                __html: currentVowel ? highlightWord(w, currentVowel.name) : w,
+              }}
+            />
+            <button
+              type="button"
+              className="play-btn"
+              onClick={() => playWord(w)}
+            >
+              ▶ 再生
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}

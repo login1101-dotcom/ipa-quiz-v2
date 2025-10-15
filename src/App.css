@@ -119,3 +119,10 @@ h1 {
 .vowel-red {
   color: var(--accent);
 }
+
+/* === 追加: クリック時の正誤フィードバック === */
+.choice-correct { background: #1f3b2a !important; outline: 2px solid #2ecc71; }
+.choice-wrong   { background: #3b1f1f !important; outline: 2px solid #ff4d4f; }
+
+/* 念のためクリック無効化を上書き（干渉対策） */
+.choice, .sound-btn, .play-btn { pointer-events: auto; }
