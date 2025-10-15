@@ -1,199 +1,227 @@
+import { useEffect, useState } from "react";
 import "./App.css";
-import { useMemo, useRef, useState } from "react";
 
-/* ============================
-   IPA Vowel Quiz – 完成版（音名フォールバック対応）
-   ・母音: /audio/vowels/◯◯.mp3（_ と - どちらでもOK）
-   ・例単語: /audio/◯◯.mp3（現状どおり）
-   ・誤答は赤を蓄積、正解は緑→0.8秒後に次へ
-   ============================ */
+/* =========================================
+   IPA Vowel Quiz – フォニックス母音表（PDF）に完全準拠
+   US IPA / ランダム4択 / クリック判定 / ローカル音声最優先
+   ========================================= */
 
 const VOWELS = [
-  {
-    key: "long-oo",
-    labelEn: "long oo",
-    // 実ファイルは long_oo.mp3。念のため両方試すのでどちらでも可
-    sound: "long_oo.mp3",
-    examples: [
-      { word: "too", highlights: ["oo"] },
-      { word: "loose", highlights: ["oo"] },
-      { word: "through", highlights: ["ough", "oo"] },
-    ],
-  },
-  {
-    key: "short-e",
-    labelEn: "short e",
-    sound: "short_e.mp3",
-    examples: [
-      { word: "let", highlights: ["e"] },
-      { word: "get", highlights: ["e"] },
-      { word: "egg", highlights: ["e"] },
-    ],
-  },
-  {
-    key: "long-a",
-    labelEn: "long a",
-    sound: "long_a.mp3",
-    examples: [
-      { word: "fate", highlights: ["a"] },
-      { word: "they", highlights: ["ey"] },
-      { word: "great", highlights: ["ea", "a"] },
-    ],
-  },
-  {
-    key: "or-sound",
-    labelEn: "or sound",
-    sound: "or_sound.mp3",
-    examples: [
-      { word: "for", highlights: ["or"] },
-      { word: "sort", highlights: ["or"] },
-      { word: "storm", highlights: ["or"] },
-    ],
-  },
+  { name: "short a", ipa: "/æ/",  examples: ["camp", "bath", "fan"] },
+  { name: "long a",  ipa: "/eɪ/", examples: ["fate", "they", "great"] },
+  { name: "ar sound", ipa: "/ɑːr/", examples: ["car", "art", "mark"] },
+  { name: "Schwa",   ipa: "/ə/",  examples: ["about", "support", "pencil"] },
+
+  { name: "short e", ipa: "/e/",   examples: ["let", "get", "egg"] },
+  { name: "long e",  ipa: "/iː/",  examples: ["fee", "she", "believe"] },
+  { name: "er sound", ipa: "/ɝː/", examples: ["bird", "term", "hurt"] },
+
+  { name: "short i", ipa: "/ɪ/",  examples: ["fit", "income", "it"] },
+  { name: "long i",  ipa: "/aɪ/", examples: ["eye", "iron", "idea"] },
+
+  { name: "short o", ipa: "/ɑ/",  examples: ["hot", "not", "lock"] },
+  { name: "short oo", ipa: "/ʊ/", examples: ["book", "should", "put"] },
+  { name: "long oo",  ipa: "/uː/", examples: ["too", "loose", "through"] },
+
+  { name: "long o",  ipa: "/oʊ/", examples: ["note", "no", "slow"] },
+  { name: "ow sound", ipa: "/aʊ/", examples: ["house", "out", "count"] },
+  { name: "oi sound", ipa: "/ɔɪ/", examples: ["boy", "joy", "join"] },
+  { name: "or sound", ipa: "/ɔr/", examples: ["for", "sort", "storm"] },
+
+  { name: "short u", ipa: "/ʌ/",  examples: ["but", "fun", "come"] },
 ];
 
-const CHOICES = ["or sound", "long a", "short e", "long oo"];
+/* ---------- utils ---------- */
+function shuffle(a0) {
+  const a = [...a0];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+const sanitize = (s) =>
+  String(s).trim().toLowerCase().replaceAll(" ", "_").replaceAll("/", "");
 
-// 単語の最初の一致だけ赤にする
-function highlightFirst(word, candidates) {
-  const lower = word.toLowerCase();
-  for (const h of candidates) {
-    const i = lower.indexOf(h.toLowerCase());
-    if (i !== -1) {
-      return (
-        word.slice(0, i) +
-        `<span class="vowel-red">${word.slice(i, i + h.length)}</span>` +
-        word.slice(i + h.length)
-      );
+/* === 例単語の赤字ハイライト（PDF準拠 修正版） === */
+const VOWEL_REGEX = {
+  "short a": /(a)/i,
+  "long a": /(ey|ea|ai|ay|a(?=.))/i,
+  "ar sound": /(ar)/i,
+  Schwa: /([aeiou])/i,
+  "short e": /(e)/i,
+  "long e": /(ee|ea|ie|e$)/i,
+  "er sound": /(ir|er|ur|ear)/i,
+  "short i": /(i)/i,
+  "long i": /(ey|igh|i(?=.)|y)/i,
+  "short o": /(o)/i,
+  "short oo": /(oo|ou|u)/i,
+  "long oo": /(oo|ew|ue|ou(?=gh))/i,
+  "long o": /(oa|ow|oe|o$|o(?=.))/i,
+  "ow sound": /(ow|ou)/i,
+  "oi sound": /(oi|oy)/i,
+  "or sound": /(ore|oar|or)/i,
+  "short u": /(u|o(?=[^aeiou]*e?$))/i,
+};
+
+function highlightWord(w, vowelName) {
+  const rx = VOWEL_REGEX[vowelName];
+  return rx ? w.replace(rx, (m) => `<span class="vowel-red">${m}</span>`) : w;
+}
+
+/* ---------- audio: ローカル(MP3/M4A/WAV)最優先 ---------- */
+async function tryPlay(url) {
+  return new Promise((resolve, reject) => {
+    const audio = new Audio(url);
+    audio.oncanplaythrough = () => audio.play().then(resolve).catch(reject);
+    audio.onerror = reject;
+    audio.load();
+  });
+}
+function urlCandidates(relNoExt) {
+  const exts = [".mp3", ".m4a", ".wav"];
+  const base = import.meta.env.BASE_URL || "/";
+  const baskets = [
+    `${base}assets/audio/`,
+    `${base}assets/`,
+    `${base}audio/`,
+    `${base}sounds/`,
+    "/",
+  ];
+  const urls = [];
+  for (const b of baskets) for (const e of exts) urls.push(`${b}${relNoExt}${e}`);
+  return urls;
+}
+async function playWord(word) {
+  const key = sanitize(word);
+  for (const u of urlCandidates(`words/${key}`)) {
+    try { await tryPlay(u); return; } catch {}
+  }
+}
+async function playVowel(vowelName, sampleWord) {
+  const key = sanitize(vowelName);
+  for (const u of urlCandidates(`ipa/${key}`)) {
+    try { await tryPlay(u); return; } catch {}
+  }
+  await playWord(sampleWord);
+}
+
+/* ---------- component ---------- */
+export default function App() {
+  const [currentVowel, setCurrentVowel] = useState(null);
+  const [choices, setChoices] = useState([]);
+  const [examples, setExamples] = useState([]);
+  const [answer, setAnswer] = useState(null);
+  const [picked, setPicked] = useState({});
+  const [solved, setSolved] = useState(false);
+
+  // === 追加：一巡ランダム機能 ===
+  const [order, setOrder] = useState([]);
+  const [index, setIndex] = useState(0);
+
+  function prepareOrder() {
+    const shuffled = shuffle(VOWELS);
+    setOrder(shuffled);
+    setIndex(0);
+    return shuffled;
+  }
+
+  function newQuestion() {
+    let pool = order;
+    if (!pool.length || index >= pool.length) {
+      pool = prepareOrder();
+    }
+    const v = pool[index];
+    setCurrentVowel(v);
+    setAnswer(v.name);
+    const wrong = shuffle(VOWELS.filter((x) => x.name !== v.name)).slice(0, 3);
+    setChoices(shuffle([v.name, ...wrong.map((x) => x.name)]));
+    setExamples(v.examples.slice(0, 3));
+    setPicked({});
+    setSolved(false);
+    setIndex((i) => i + 1);
+  }
+
+  useEffect(() => {
+    prepareOrder();
+    newQuestion();
+  }, []);
+
+  function onPick(opt) {
+    if (solved) return;
+    const ok = opt === answer;
+    setPicked((prev) => ({ ...prev, [opt]: ok ? "correct" : "wrong" }));
+    if (ok) {
+      setSolved(true);
+      setTimeout(() => newQuestion(), 800);
     }
   }
-  return word;
-}
-
-function ExampleWord({ word, highlights, onPlay }) {
-  const html = useMemo(() => highlightFirst(word, highlights), [word, highlights]);
-  return (
-    <div className="ex-card">
-      <div className="ex-word" dangerouslySetInnerHTML={{ __html: html }} />
-      <button type="button" className="play-btn" onClick={onPlay}>▶ 再生</button>
-    </div>
-  );
-}
-
-// 404でも固まらず、候補を順番に試す再生
-function useSmartAudio() {
-  const ref = useRef(null);
-  const play = (paths) => {
-    const a = ref.current || new Audio();
-    const srcs = Array.isArray(paths) ? paths : [paths];
-    let i = 0;
-    const tryNext = () => {
-      if (i >= srcs.length) return;
-      a.src = `/audio/${srcs[i++]}`;
-      a.oncanplay = () => { a.play().catch(() => {}); a.oncanplay = null; a.onerror = null; };
-      a.onerror = tryNext;
-      a.load();
-    };
-    tryNext();
-    ref.current = a;
-  };
-  return play;
-}
-
-export default function App() {
-  const [qKey, setQKey] = useState(VOWELS[0].key);
-  const [score, setScore] = useState({ correct: 0, total: 0 });
-  const [locked, setLocked] = useState(false);        // 正解後だけロック
-  const [wrongPicks, setWrongPicks] = useState([]);   // 赤を蓄積
-  const [correctPick, setCorrectPick] = useState(""); // 緑は1つ
-  const playAudio = useSmartAudio();
-
-  const current = useMemo(
-    () => VOWELS.find(v => v.key === qKey) ?? VOWELS[0],
-    [qKey]
-  );
-
-  const choiceList = useMemo(
-    () => CHOICES.map(label => ({ label, value: label, isAnswer: label === current.labelEn })),
-    [current]
-  );
-
-  const nextQuestion = () => {
-    const others = VOWELS.filter(v => v.key !== qKey);
-    const n = others[Math.floor(Math.random() * others.length)];
-    setQKey(n.key);
-    setWrongPicks([]);
-    setCorrectPick("");
-    setLocked(false);
-  };
-
-  const onAnswer = (choice) => {
-    if (locked) return;
-    const ok = choice === current.labelEn;
-    setScore(s => ({ correct: s.correct + (ok ? 1 : 0), total: s.total + 1 }));
-
-    if (ok) {
-      setCorrectPick(choice);
-      setLocked(true);
-      setTimeout(nextQuestion, 800);
-    } else {
-      setWrongPicks(prev => (prev.includes(choice) ? prev : [...prev, choice]));
-    }
-  };
-
-  // 再生ユーティリティ
-  const playVowel = () => {
-    const base = current.sound; // 例: long_oo.mp3
-    // フォールバック: _ と - の両方を試す
-    const alt1 = base.replaceAll("_", "-");
-    const alt2 = base.replaceAll("-", "_");
-    playAudio([`vowels/${base}`, `vowels/${alt1}`, `vowels/${alt2}`]);
-  };
-  const playWord = (w) => playAudio(`${w}.mp3`);
 
   return (
     <div className="wrap">
-      <h1>IPA Vowel Quiz　v3 FIX</h1>
-
-      <div className="mode-row">
-        <div>Mode: A（音→名称）</div>
-        <div>Score: {score.correct} / {score.total}</div>
-      </div>
+      <h1>IPA Vowel Quiz</h1>
 
       <div className="q-row">
-        <span>母音の音を聞いて名称を選んでください</span>
-        <button type="button" className="sound-btn" onClick={playVowel}>▶ 再生</button>
+        <div>この発音記号は？</div>
+        <div
+          style={{
+            fontWeight: 800,
+            fontSize: "28px",
+            padding: "6px 10px",
+            borderRadius: "10px",
+            border: "1px solid #333542",
+            background: "linear-gradient(180deg, #1f1f27, #14141b)",
+          }}
+        >
+          {currentVowel?.ipa || ""}
+        </div>
+        <button
+          type="button"
+          className="sound-btn"
+          onClick={() => currentVowel && playVowel(currentVowel.name, currentVowel.examples[0])}
+        >
+          ▶ 再生
+        </button>
       </div>
 
       <div className="choices">
-        {choiceList.map(c => {
-          let style = {};
-          if (correctPick === c.value) style = { outline: "2px solid #2ecc71" }; // 緑
-          else if (wrongPicks.includes(c.value)) style = { outline: "2px solid #ff4d4f" }; // 赤（蓄積）
+        {choices.map((opt) => {
+          const state = picked[opt];
+          const cls =
+            "choice" +
+            (state === "correct" ? " choice-correct" : "") +
+            (state === "wrong" ? " choice-wrong" : "");
           return (
             <button
+              key={opt}
               type="button"
-              key={c.value}
-              className="choice"
-              style={style}
-              onClick={() => onAnswer(c.value)}
-              disabled={locked} // 正解後のみロック
+              className={cls}
+              onClick={() => onPick(opt)}
             >
-              {c.label}
+              {opt}
             </button>
           );
         })}
       </div>
 
-      <h2 className="sec-title">例単語</h2>
+      <div className="sec-title"><strong>例単語:</strong></div>
       <div className="examples">
-        {current.examples.map(ex => (
-          <ExampleWord
-            key={ex.word}
-            word={ex.word}
-            highlights={ex.highlights}
-            onPlay={() => playWord(ex.word)}
-          />
+        {examples.map((w) => (
+          <div className="ex-card" key={w}>
+            <div
+              className="ex-word"
+              dangerouslySetInnerHTML={{
+                __html: currentVowel ? highlightWord(w, currentVowel.name) : w,
+              }}
+            />
+            <button
+              type="button"
+              className="play-btn"
+              onClick={() => playWord(w)}
+            >
+              ▶ 再生
+            </button>
+          </div>
         ))}
       </div>
     </div>
